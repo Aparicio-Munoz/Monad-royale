@@ -1,0 +1,7 @@
+{
+  "dependencies": {
+    "lucide-react": "^1.17.0",
+    "viem": "^2.52.2",
+    "wagmi": "^3.6.16"
+  }
+}
