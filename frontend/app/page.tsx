@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { useAccount, useConnect, useDisconnect, useConnectors, useReadContract, useWriteContract, useWaitForTransactionReceipt } from "wagmi";
+import { useAccount, useConnect, useDisconnect, useConnectors, useReadContract, useWriteContract, useWaitForTransactionReceipt, useChainId, useSwitchChain } from "wagmi";
+import { monadTestnet } from "@/lib/wagmi";
 import { CONTRACT_ABI } from "@/lib/abi";
 
 // ── types ──────────────────────────────────────────────────────────────────────
@@ -95,25 +96,56 @@ function WalletButton() {
   const { address, isConnected } = useAccount();
   const { connect } = useConnect();
   const { disconnect } = useDisconnect();
+  const { switchChain } = useSwitchChain();
   const connectors = useConnectors();
+  const chainId = useChainId();
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => { setMounted(true); }, []);
 
   const injectedConnector = connectors.find((c) => c.type === "injected");
   const displayAddress = address
     ? `${address.slice(0, 6)}...${address.slice(-4)}`
     : "";
 
-  return isConnected && address ? (
+  // Render the disconnected state on server and until client hydration is done.
+  if (!mounted) {
+    return (
+      <button
+        disabled
+        className="pulse-glow rounded-lg border border-violet-500 bg-violet-600/20 px-5 py-2 text-sm font-semibold text-violet-200 opacity-0"
+      >
+        Connect Wallet
+      </button>
+    );
+  }
+
+  if (isConnected && address) {
+    if (chainId !== monadTestnet.id) {
+      return (
+        <button
+          onClick={() => switchChain({ chainId: monadTestnet.id })}
+          className="flex items-center gap-2 rounded-lg border border-amber-500/60 bg-amber-950/30 px-4 py-2 text-sm font-semibold text-amber-300 transition-all hover:bg-amber-900/40 hover:text-amber-100"
+        >
+          ⚠ Switch to Monad Testnet
+        </button>
+      );
+    }
+    return (
+      <button
+        onClick={() => disconnect()}
+        className="group flex items-center gap-2 rounded-lg border border-violet-500/50 bg-violet-950/40 px-4 py-2 text-sm font-medium text-violet-300 transition-all hover:border-violet-400 hover:bg-violet-900/50 hover:text-violet-100"
+      >
+        <span className="h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_6px_#34d399]" />
+        <span className="font-mono">{displayAddress}</span>
+        <span className="hidden text-xs text-violet-500 group-hover:inline">disconnect</span>
+      </button>
+    );
+  }
+
+  return (
     <button
-      onClick={() => disconnect()}
-      className="group flex items-center gap-2 rounded-lg border border-violet-500/50 bg-violet-950/40 px-4 py-2 text-sm font-medium text-violet-300 transition-all hover:border-violet-400 hover:bg-violet-900/50 hover:text-violet-100"
-    >
-      <span className="h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_6px_#34d399]" />
-      <span className="font-mono">{displayAddress}</span>
-      <span className="hidden text-xs text-violet-500 group-hover:inline">disconnect</span>
-    </button>
-  ) : (
-    <button
-      onClick={() => injectedConnector && connect({ connector: injectedConnector })}
+      onClick={() => injectedConnector && connect({ connector: injectedConnector, chainId: monadTestnet.id })}
       className="pulse-glow rounded-lg border border-violet-500 bg-violet-600/20 px-5 py-2 text-sm font-semibold text-violet-200 transition-all hover:bg-violet-600/40 hover:text-white"
     >
       Connect Wallet
@@ -434,6 +466,8 @@ function EliminatedTable({ players, flashIds }: { players: EliminatedPlayer[]; f
 
 function JoinButton({ onJoined }: { onJoined: () => void }) {
   const { address, isConnected } = useAccount();
+  const chainId = useChainId();
+  const { switchChain } = useSwitchChain();
 
   const { data: alreadyJoined } = useReadContract({
     address: CONTRACT_ADDRESS,
@@ -464,22 +498,28 @@ function JoinButton({ onJoined }: { onJoined: () => void }) {
     );
   }
 
+  const onWrongChain = chainId !== monadTestnet.id;
   const busy = isPending || isConfirming;
   const label = isPending ? "Confirm in wallet…" : isConfirming ? "Joining…" : "Join Game";
 
   return (
     <button
-      onClick={() =>
+      onClick={() => {
+        if (onWrongChain) {
+          switchChain({ chainId: monadTestnet.id });
+          return;
+        }
         writeContract({
           address: CONTRACT_ADDRESS!,
           abi: CONTRACT_ABI,
           functionName: "joinGame",
-        })
-      }
+          chainId: monadTestnet.id,
+        });
+      }}
       disabled={busy}
       className="rounded-lg border border-emerald-500/50 bg-emerald-950/30 px-4 py-2 text-sm font-semibold text-emerald-300 transition-all hover:bg-emerald-900/40 hover:border-emerald-400/60 hover:text-emerald-100 disabled:opacity-50 disabled:cursor-not-allowed"
     >
-      {label}
+      {onWrongChain ? "Switch to Monad" : label}
     </button>
   );
 }
