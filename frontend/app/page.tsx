@@ -45,14 +45,6 @@ const CONTRACT_ADDRESS = process.env.NEXT_PUBLIC_CONTRACT_ADDRESS as
   | `0x${string}`
   | undefined;
 
-const INITIAL_ELIMINATED: EliminatedPlayer[] = [
-  { rank: 7,  address: "0xY5z6...A7b8", kills: 3, eliminatedBy: "0xA1b2...C3d4", survivalTime: "14m 32s" },
-  { rank: 8,  address: "0xC9d0...E1f2", kills: 2, eliminatedBy: "0xE5f6...G7h8", survivalTime: "11m 07s" },
-  { rank: 9,  address: "0xG3h4...I5j6", kills: 1, eliminatedBy: "0xI9j0...K1l2", survivalTime: "09m 44s" },
-  { rank: 10, address: "0xK7l8...M9n0", kills: 0, eliminatedBy: "0xM3n4...O5p6", survivalTime: "07m 18s" },
-  { rank: 11, address: "0xO1p2...Q3r4", kills: 1, eliminatedBy: "0xA1b2...C3d4", survivalTime: "05m 52s" },
-  { rank: 12, address: "0xS5t6...U7v8", kills: 0, eliminatedBy: "0xQ7r8...S9t0", survivalTime: "03m 29s" },
-];
 
 const INITIAL_FEED: FeedEvent[] = [
   { id: 10, type: "round",       message: "Round 4 — Final 6 remaining",                    timestamp: "2m ago"  },
@@ -370,9 +362,41 @@ function StatsBar({ total, alive, eliminated }: { total: number; alive: number; 
   );
 }
 
+// ── EliminateButton ───────────────────────────────────────────────────────────
+
+function EliminateButton({ playerAddress, onSuccess }: { playerAddress: string; onSuccess: () => void }) {
+  const { writeContract, data: txHash, isPending } = useWriteContract();
+  const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({ hash: txHash });
+
+  useEffect(() => {
+    if (isSuccess) onSuccess();
+  }, [isSuccess, onSuccess]);
+
+  const busy = isPending || isConfirming;
+
+  return (
+    <button
+      onClick={() =>
+        writeContract({
+          address: CONTRACT_ADDRESS!,
+          abi: CONTRACT_ABI,
+          functionName: "eliminatePlayer",
+          args: [playerAddress as `0x${string}`],
+          chainId: monadTestnet.id,
+        })
+      }
+      disabled={busy}
+      className="rounded border border-red-500/40 bg-red-950/20 px-2 py-1 text-xs font-semibold text-red-400 transition-all hover:bg-red-950/40 hover:border-red-400/60 hover:text-red-300 disabled:opacity-50 disabled:cursor-not-allowed"
+    >
+      {isPending ? "Confirm…" : isConfirming ? "Waiting…" : "Eliminate"}
+    </button>
+  );
+}
+
 // ── AliveTable ────────────────────────────────────────────────────────────────
 
-function AliveTable({ players }: { players: Player[] }) {
+function AliveTable({ players, onEliminate }: { players: Player[]; onEliminate?: (address: string) => void }) {
+  const cols = onEliminate ? 6 : 5;
   return (
     <div className="rounded-xl border border-emerald-700/30 bg-white/[0.02] overflow-hidden">
       <div className="flex items-center gap-2 border-b border-emerald-700/30 bg-emerald-950/20 px-4 py-3">
@@ -389,6 +413,7 @@ function AliveTable({ players }: { players: Player[] }) {
               <th className="px-4 py-2">Kills</th>
               <th className="px-4 py-2">HP</th>
               <th className="hidden px-4 py-2 sm:table-cell">Prize</th>
+              {onEliminate && <th className="px-4 py-2">Action</th>}
             </tr>
           </thead>
           <tbody>
@@ -403,11 +428,16 @@ function AliveTable({ players }: { players: Player[] }) {
                 <td className="hidden px-4 py-3 sm:table-cell">
                   <span className="text-xs font-semibold text-violet-300">{p.prize}</span>
                 </td>
+                {onEliminate && (
+                  <td className="px-4 py-3">
+                    <EliminateButton playerAddress={p.address} onSuccess={() => onEliminate(p.address)} />
+                  </td>
+                )}
               </tr>
             ))}
             {players.length === 0 && (
               <tr>
-                <td colSpan={5} className="px-4 py-8 text-center text-xs text-slate-600">No players remaining</td>
+                <td colSpan={cols} className="px-4 py-8 text-center text-xs text-slate-600">No players remaining</td>
               </tr>
             )}
           </tbody>
@@ -537,8 +567,35 @@ export default function Home() {
     },
   });
 
+  const { data: eliminatedAddresses, refetch: refetchEliminated } = useReadContract({
+    address: CONTRACT_ADDRESS,
+    abi: CONTRACT_ABI,
+    functionName: "getEliminatedPlayers",
+    query: {
+      enabled: !!CONTRACT_ADDRESS,
+      refetchInterval: 3000,
+    },
+  });
+
+  const { data: contractOwner } = useReadContract({
+    address: CONTRACT_ADDRESS,
+    abi: CONTRACT_ABI,
+    functionName: "owner",
+    query: { enabled: !!CONTRACT_ADDRESS },
+  });
+
+  const { data: winnerAddress } = useReadContract({
+    address: CONTRACT_ADDRESS,
+    abi: CONTRACT_ABI,
+    functionName: "getWinner",
+    query: {
+      enabled: !!CONTRACT_ADDRESS,
+      refetchInterval: 3000,
+    },
+  });
+
   const [alive, setAlive] = useState<Player[]>([]);
-  const [eliminated, setEliminated] = useState<EliminatedPlayer[]>(INITIAL_ELIMINATED);
+  const [eliminated, setEliminated] = useState<EliminatedPlayer[]>([]);
 
   useEffect(() => {
     if (!aliveAddresses) return;
@@ -552,6 +609,19 @@ export default function Home() {
       }))
     );
   }, [aliveAddresses]);
+
+  useEffect(() => {
+    if (!eliminatedAddresses) return;
+    setEliminated(
+      eliminatedAddresses.map((addr, i) => ({
+        rank: i + 1,
+        address: addr,
+        kills: 0,
+        eliminatedBy: "—",
+        survivalTime: "—",
+      }))
+    );
+  }, [eliminatedAddresses]);
   const [round, setRound] = useState(4);
   const [countdown, setCountdown] = useState(ROUND_DURATION);
   const [feed, setFeed] = useState<FeedEvent[]>(INITIAL_FEED);
@@ -570,10 +640,29 @@ export default function Home() {
     setFeed((prev) => [{ id, type, message, timestamp: "just now" }, ...prev].slice(0, 25));
   }, []);
 
+  const { address } = useAccount();
+  const isOwner = !!address && !!contractOwner &&
+    address.toLowerCase() === contractOwner.toLowerCase();
+
   const handleJoined = useCallback(() => {
     void refetchAlive();
     pushFeedEvent("join", "A new wallet joined the game");
   }, [refetchAlive, pushFeedEvent]);
+
+  const handleEliminated = useCallback(() => {
+    void refetchAlive();
+    void refetchEliminated();
+  }, [refetchAlive, refetchEliminated]);
+
+  useEffect(() => {
+    if (gameOver) return;
+    if (!winnerAddress || winnerAddress === "0x0000000000000000000000000000000000000000") return;
+    const w: Winner = { address: winnerAddress, kills: 0, prize: "—" };
+    pushFeedEvent("game_end", `Game Over — ${winnerAddress} wins!`);
+    setWinner(w);
+    setGameOver(true);
+    setShowModal(true);
+  }, [winnerAddress, gameOver, pushFeedEvent]);
 
   // live countdown
   useEffect(() => {
@@ -735,7 +824,7 @@ export default function Home() {
 
         {/* ── main grid: tables + feed ── */}
         <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
-          <AliveTable players={alive} />
+          <AliveTable players={alive} onEliminate={isOwner ? handleEliminated : undefined} />
           <EliminatedTable players={eliminated} flashIds={flashIds} />
           <div className="md:col-span-2 lg:col-span-1">
             <ActivityFeed events={feed} latestId={latestFeedId} />
